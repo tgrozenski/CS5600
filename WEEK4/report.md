@@ -112,3 +112,95 @@ ffffffffff600000 --xp 00000000  00:00      0      4      0      0         0     
 ```
 
 I recognize the a.out mapping as the source code that I have compiled with gcc, then I see the heap 102404 is anonymous memory. I would have expected it to go above in the line that says heap, but I can see that the heap is size 132. Perhaps since this did not fit the OS allocated as anonymous memory instead. It also makes sense that we see these libc.so files, I did use a few header files such as stdio, stdbool, ect. The linux so files might have to do with gcc compiling the code for the particular architecture my VM has. We see again the linux specific mappings are used for this program as well.
+
+# Chapter 14
+
+1. I wrote the program null.c where I allocated memory for a pointer, set it to null, then tried to access the value. I got a segmentation fault:
+
+```bash
+ubuntu@cs5600:~/coding_2$ ./a.out
+Segmentation fault (core dumped)
+```
+
+2. I reran with gdb and got the following output:
+
+```bash
+Starting program: /home/ubuntu/coding_2/null
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+Program received signal SIGSEGV, Segmentation fault.
+0x0000555555555196 in main ()
+```
+
+It would appear to me that SIGSEGV is some sort of signal sent from the operating system to kill the program because it is breaking the rules. We have the function that caused this main. The hex number is definitely an address, maybe to the instruction that crashed the program.
+
+3. Running valgrind I got the following:
+
+```bash
+ubuntu@cs5600:~/coding_2$ valgrind --leak-check=yes ./null
+==3034== Memcheck, a memory error detector
+==3034== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.
+==3034== Using Valgrind-3.26.0 and LibVEX; rerun with -h for copyright info
+==3034== Command: ./null
+==3034==
+==3034== Invalid read of size 4
+==3034==    at 0x4001196: main (in /home/ubuntu/coding_2/null)
+==3034==  Address 0x0 is not stack'd, malloc'd or (recently) free'd
+==3034==
+==3034==
+==3034== Process terminating with default action of signal 11 (SIGSEGV)
+==3034==  Access not within mapped region at address 0x0
+==3034==    at 0x4001196: main (in /home/ubuntu/coding_2/null)
+==3034==  If you believe this happened as a result of a stack
+==3034==  overflow in your program's main thread (unlikely but
+==3034==  possible), you can try to increase the size of the
+==3034==  main thread stack using the --main-stacksize= flag.
+==3034==  The main thread stack size used in this run was 8388608.
+==3034==
+==3034== HEAP SUMMARY:
+==3034==     in use at exit: 4 bytes in 1 blocks
+==3034==   total heap usage: 1 allocs, 0 frees, 4 bytes allocated
+==3034==
+==3034== 4 bytes in 1 blocks are definitely lost in loss record 1 of 1
+==3034==    at 0x484B80F: malloc (vg_replace_malloc.c:447)
+==3034==    by 0x4001185: main (in /home/ubuntu/coding_2/null)
+==3034==
+==3034== LEAK SUMMARY:
+==3034==    definitely lost: 4 bytes in 1 blocks
+==3034==    indirectly lost: 0 bytes in 0 blocks
+==3034==      possibly lost: 0 bytes in 0 blocks
+==3034==    still reachable: 0 bytes in 0 blocks
+==3034==         suppressed: 0 bytes in 0 blocks
+==3034==
+==3034== For lists of detected and suppressed errors, rerun with: -s
+==3034== ERROR SUMMARY: 2 errors from 2 contexts (suppressed: 0 from 0)
+Segmentation fault (core dumped)
+```
+
+It clearly is telling me the program performed an invalid read of size 4. The 4 bytes must be the integer I malloc'd. It also tells me the memory address 0x4001196 and offending function main. It tells me the signal as gdb did and explained that the program tried to access 0x0 which the program is not allowed to access from. We know that NULL is mapped to 0 in c, so 0x0 must be referring to the fact that our program is trying to dereference null. This explains what happened (illegal read) and where it happened (the instruction address of compiled program).
+
+4. I wrote no_free.c for this question. It just allocates memory for a number, assigns it, and dereferences it to access the value.
+
+When I run gdb I get that the process exits normally.
+
+```bash
+(gdb) run
+Starting program: /home/ubuntu/coding_2/a.out
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+The number is: 1
+[Inferior 1 (process 3264) exited normally]
+```
+
+Valgrind however does show that there is a memory leak.
+
+```bash
+==3271== 4 bytes in 1 blocks are definitely lost in loss record 1 of 1
+==3271==    at 0x484B80F: malloc (vg_replace_malloc.c:447)
+==3271==    by 0x4001185: main (in /home/ubuntu/coding_2/a.out)
+```
+
+This matches what I would expect. Valgrind is a tool to detect memory leaks like this one, gdb is more focused on debugging. Behavior like this is not technically harmful though it is bad practice.
+
+5. I wrote the program named malloc_zero.c. When I compiled this program nothing bad seemed to happen it just printed the "done" message I put at the end. When I run valgrind we see that I still had an invalid write and the 400 bytes are being leaked. There is no mention of a SIGSEGV. So even though this program not correct and has a memory leak it did not trigger a segmentation fault. The two bugs are an invalid write (out of bounds) and the memory leak. This goes to show that the program would seem perfectly benign after compiling and running it with serious memory issues.
