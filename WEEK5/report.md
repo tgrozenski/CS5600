@@ -146,3 +146,69 @@ plt.show()
 ![Graph](./graph.png)
 
 # Chapter 16
+
+1. If we assume 2 segments as the output states segements are in 0 or 1 the first segment is between 0 - 63 with the second being between 64 and 128.
+
+```bash
+VA  0: 0x0000006c (decimal:  108) --> PA or segmentation violation?
+VA  1: 0x00000061 (decimal:   97) --> PA or segmentation violation?
+VA  2: 0x00000035 (decimal:   53) --> PA or segmentation violation?
+VA  3: 0x00000021 (decimal:   33) --> PA or segmentation violation?
+VA  4: 0x00000041 (decimal:   65) --> PA or segmentation violation?
+```
+
+0: The first address (108) would go in segment 1. Since segment 1 grows negatively we need to calculate negative offset, our physical address will be base plus the negative offset. Negative offset is 108 - 128 =  -20 (we can do this because segment 1 is always the top segment in this simulator, but really should be segment sizes VA - 64 - 64). Since negative 20 is below the limit we know that it is not a segmentation violation. Thus the physical address is 512 - 20 = 492.
+
+1: 97 - 128 = -31, |-31| <= 20 -> False segmentation fault
+
+2. For 2 this is within segment 0 so positive growth this is greater than to 20 so it is a segmentation fault.
+
+3. 33 Also going to be greater than 20 so segmentation violation.
+
+4. 65 - 128 = -63, |-63| <= 20 -> false, Segmentation violation
+
+```bash
+VA  0: 0x00000011 (decimal:   17) --> PA or segmentation violation?
+VA  1: 0x0000006c (decimal:  108) --> PA or segmentation violation?
+VA  2: 0x00000061 (decimal:   97) --> PA or segmentation violation?
+VA  3: 0x00000020 (decimal:   32) --> PA or segmentation violation?
+VA  4: 0x0000003f (decimal:   63) --> PA or segmentation violation?
+```
+
+```bash
+VA  0: 0x0000007a (decimal:  122) --> PA or segmentation violation?
+VA  1: 0x00000079 (decimal:  121) --> PA or segmentation violation?
+VA  2: 0x00000007 (decimal:    7) --> PA or segmentation violation?
+VA  3: 0x0000000a (decimal:   10) --> PA or segmentation violation?
+VA  4: 0x0000006a (decimal:  106) --> PA or segmentation violation?
+```
+
+2. We know that with a limit of 20 we have 20 valid addresses on either side. Segment 0 is easy for positive growth, there are 20 valid addresses here, 0 - 19. Then on the upper side we have between 108 - 128. Everything below 108 is out of bounds so 20 - 108 will not work.
+
+3. I did the following to get only two valid addresses on each side of the address space. The insight is to set the length to 2 for each and keep base 0 at 0 and base 1 at physical memories size. This ensures that 0 and 1 will be valid and 14 & 15 will be valid. Nothing in between can be with length 2.
+
+```bash
+ubuntu@cs5600:~/ostep-homework/vm-segmentation$ ./segmentation.py -a 16 -p 128 -A 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 --b0 0 --l0 2 --b1 128 --l1 2 -c
+```
+```
+```
+
+4. Limit is the most important lever we can pull here to guarantee an exact percentage. Take the example:
+
+num_valid = (l0 + l1) / address_size_space
+
+To test this I ran the following:
+
+```bash
+total=0
+for i in $(seq 1 100); do
+    count=$(./segmentation.py -a 32 -p 128 --b0 0 --l0 15 --b1 128 --l1 14 -n 100 -s $i -c \
+        | grep -o "SEGMENTATION VIOLATION" | wc -l)
+    total=$((total + count))
+done
+echo "scale=2; $total / $NUM_RUNS" | bc
+```
+
+The result was 9.34 segmentation violations which means approximately 90% of addresses were valid. Because we are working with randomness we can't guarantee an outcome but we can get fairly close.
+
+5. If you set -l0 and -l1 to 0 then there can be no valid addresses.
