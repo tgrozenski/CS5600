@@ -21,7 +21,7 @@ Virtual Address Trace
   VA  4: 0x0000029b (decimal:  667) --> SEGMENTATION VIOLATION
 ```
 
-For one only VA 1 is valid, to calculate the translation that occurs we will have to do VA - Base to get the true hardware address. In decimal this is 14145 - 13884 = 261
+For seed 1, only VA 1 is valid. To check the translation that occurs we subtract the base from the physical address to recover the virtual address. In decimal this is 14145 - 13884 = 261.
 
 ```bash
 ubuntu@cs5600:~/ostep-homework/vm-mechanism$ ./relocation.py -s 2 -c
@@ -95,18 +95,18 @@ Virtual Address Trace
   VA  9: 0x000003a1 (decimal:  929) --> VALID: 0x000039ac (decimal: 14764)
 ```
 
-I noticed when running it a lot that bigger numbers for the bounds produced better results. When searching for the smallest number that would have all addresses valid I found you have to set the bounds register to the largest address generated + 1. So the base doesn't actually matter here, as long as the addresses generated are within the bounds we set there is no segmentation violation.
+I noticed when running it a lot that bigger numbers for the bounds produced better results. When searching for the smallest number that would make all addresses valid, I found that you have to set the bounds register to the largest address generated + 1. So the base doesn't actually matter here; as long as the addresses generated are within the bounds we set, there is no segmentation violation.
 
-3. I saw that when I run with a very large number I get an error that says:
+3. I saw that when I ran with a very large base I got an error that says:
 
 ```bash
 Error: address space does not fit into physical memory with those base/bounds values.
 Base + Limit: 10000000   Psize: 16384
 ```
 
-With that I found that 16284 (have to factor in the + 100 for the limit) will fit in memory. 16285 will not as it is over the base + limit Psize. This checks out because 16k is 16384 bytes.
+With that I found that a base of 16284 (you have to factor in the limit of 100) will fit in memory. 16285 will not, as base + limit would then exceed the physical memory size. This checks out because 16k is 16384 bytes.
 
-4. I tried many different values for -a and -p and the rules held. The bound check is still virtual address < the limit & base + limit needs to be less than the physical memory size. The translation stays the same even as the size scaled up.
+4. I tried many different values for -a and -p and the rules held. The bounds check is still virtual address < the limit, and base + limit still needs to be no larger than the physical memory size. The translation stays the same even as the sizes scale up.
 
 5. I used `matplotlib` to create the following chart. 
 
@@ -147,7 +147,7 @@ plt.show()
 
 # Chapter 16
 
-1. If we assume 2 segments as the output states segements are in 0 or 1 the first segment is between 0 - 63 with the second being between 64 and 128.
+1. If we assume 2 segments, as the output states that segments are in 0 or 1, the first segment covers 0 - 63 with the second covering 64 - 127.
 
 ```bash
 VA  0: 0x0000006c (decimal:  108) --> PA or segmentation violation?
@@ -157,15 +157,15 @@ VA  3: 0x00000021 (decimal:   33) --> PA or segmentation violation?
 VA  4: 0x00000041 (decimal:   65) --> PA or segmentation violation?
 ```
 
-0: The first address (108) would go in segment 1. Since segment 1 grows negatively we need to calculate negative offset, our physical address will be base plus the negative offset. Negative offset is 108 - 128 =  -20 (we can do this because segment 1 is always the top segment in this simulator, but really should be segment sizes VA - 64 - 64). Since negative 20 is below the limit we know that it is not a segmentation violation. Thus the physical address is 512 - 20 = 492.
+0: The first address (108) would go in segment 1. Since segment 1 grows negatively we need to calculate a negative offset; our physical address will be the base plus that negative offset. The negative offset is 108 - 128 = -20 (we can do this because segment 1 is always the top segment in this simulator, so the offset is really the VA minus the address space size). Since the size of that offset (20) is within the limit of 20, we know that it is not a segmentation violation. Thus the physical address is 512 - 20 = 492.
 
-1: 97 - 128 = -31, |-31| <= 20 -> False segmentation fault
+1: 97 - 128 = -31, |-31| <= 20 -> False, segmentation violation
 
-2. For 2 this is within segment 0 so positive growth this is greater than to 20 so it is a segmentation fault.
+2: 53 is within segment 0, which grows positively, and it is greater than the limit of 20, so it is a segmentation violation.
 
-3. 33 Also going to be greater than 20 so segmentation violation.
+3: 33 is also greater than 20, so segmentation violation.
 
-4. 65 - 128 = -63, |-63| <= 20 -> false, Segmentation violation
+4: 65 - 128 = -63, |-63| <= 20 -> False, segmentation violation
 
 ```bash
 VA  0: 0x00000011 (decimal:   17) --> PA or segmentation violation?
@@ -183,25 +183,24 @@ VA  3: 0x0000000a (decimal:   10) --> PA or segmentation violation?
 VA  4: 0x0000006a (decimal:  106) --> PA or segmentation violation?
 ```
 
-2. We know that with a limit of 20 we have 20 valid addresses on either side. Segment 0 is easy for positive growth, there are 20 valid addresses here, 0 - 19. Then on the upper side we have between 108 - 128. Everything below 108 is out of bounds so 20 - 108 will not work.
+2. We know that with a limit of 20 we have 20 valid addresses on either side. Segment 0 is easy because of its positive growth: there are 20 valid addresses here, 0 - 19. Then on the upper side we have 108 - 127. Everything in between is out of bounds, so 20 - 107 will not work.
 
-3. I did the following to get only two valid addresses on each side of the address space. The insight is to set the length to 2 for each and keep base 0 at 0 and base 1 at physical memories size. This ensures that 0 and 1 will be valid and 14 & 15 will be valid. Nothing in between can be with length 2.
+3. I did the following to get only two valid addresses on each side of the address space. The insight is to set the length to 2 for each and keep base 0 at 0 and base 1 at the physical memory size. This ensures that 0 and 1 will be valid and that 14 & 15 will be valid. Nothing in between can be valid with a length of 2.
 
 ```bash
 ubuntu@cs5600:~/ostep-homework/vm-segmentation$ ./segmentation.py -a 16 -p 128 -A 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 --b0 0 --l0 2 --b1 128 --l1 2 -c
 ```
-```
-```
 
-4. Limit is the most important lever we can pull here to guarantee an exact percentage. Take the example:
+4. The limit is the most important lever we can pull here to get an exact percentage. Take the example:
 
-num_valid = (l0 + l1) / address_size_space
+fraction_valid = (l0 + l1) / address_space_size
 
 To test this I ran the following:
 
 ```bash
 total=0
-for i in $(seq 1 100); do
+NUM_RUNS=100
+for i in $(seq 1 $NUM_RUNS); do
     count=$(./segmentation.py -a 32 -p 128 --b0 0 --l0 15 --b1 128 --l1 14 -n 100 -s $i -c \
         | grep -o "SEGMENTATION VIOLATION" | wc -l)
     total=$((total + count))
@@ -209,6 +208,26 @@ done
 echo "scale=2; $total / $NUM_RUNS" | bc
 ```
 
-The result was 9.34 segmentation violations which means approximately 90% of addresses were valid. Because we are working with randomness we can't guarantee an outcome but we can get fairly close.
+The result was an average of 9.34 segmentation violations per run of 100 addresses, which means approximately 90% of addresses were valid. Because we are working with randomness we can't guarantee an exact outcome, but we can get fairly close.
 
-5. If you set -l0 and -l1 to 0 then there can be no valid addresses.
+5. If you set `--l0` and `--l1` to 0 then there can be no valid addresses.
+
+# Chapter 17
+
+1. When I ran `malloc.py` a few times with a small number of requests I was able to trace each malloc and free. I noticed that over time we were running into what the text describes as external fragmentation. The free list was getting longer and chopped into smaller and smaller pieces.
+
+2. With the worst fit policy the program was finding the largest available chunk to allocate from instead. In this simulation this was mostly okay, but the book says this doesn't perform well at scale.
+
+3. With first fit I noticed that the program was finding the first available chunk of memory. This led to less scanning, as worst and best both need to traverse the whole list. Search time is sped up by doing things this way, but picking the first option is not always the best as we can infer.
+
+4. With `ADDRSORT` I noticed that coalescing was fast and easy because adjacent blocks ended up right next to each other in the list. `SIZESORT+` and `SIZESORT-` had the opposite effect, making coalescing harder but speeding up best & worst fit searches.
+
+5. With `-C` off I noticed that the free list got massive in size. The memory got very fragmented. Eventually bigger requests started to fail even though there was enough total memory, as a result of the fragmentation. When I tried again with it on, the free list stayed much smaller since coalescing helps us manage the memory slices effectively.
+
+6. As I got closer and closer to 100% with `-P` I saw that almost every malloc request was failing. There was nowhere to put new data, so the free list shrank to nothing. As I got closer to 0% the heap stayed mostly empty. Every request succeeded instantly and the free list was just a couple of large blocks.
+
+7. I noticed an easy way to fragment the memory space was to allocate a sequence of blocks and then free gaps in between them. This fragments the memory space intentionally.
+
+```bash
+python malloc.py -S 100 -A +10,-0,+20,-1,+30
+```
