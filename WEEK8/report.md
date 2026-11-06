@@ -1,4 +1,4 @@
-# Week 8 — Concurrency: An Introduction (threads-intro)
+# Chapter 26
 
 ---
 
@@ -617,7 +617,6 @@ ARG verbose False
 ```
 
 ```bash
-# with -i 1000, count how many times thread 0 spins (executes the waiter's mov):
 python3 x86.py -p wait-for-me.s -a ax=0,ax=1 -R ax -M 2000 -i 1000 -c \
     | awk 'BEGIN{c=0} /1002 mov/{c++} END{print "thread-0 spin iterations:", c}'
 ```
@@ -627,7 +626,6 @@ thread-0 spin iterations: 334
 ```
 
 ```bash
-# with small random intervals (-i 5 -r -s 0):
 python3 x86.py -p wait-for-me.s -a ax=0,ax=1 -R ax -M 2000 -i 5 -r -s 0 -c
 ```
 
@@ -654,3 +652,390 @@ python3 x86.py -p wait-for-me.s -a ax=0,ax=1 -R ax -M 2000 -i 5 -r -s 0 -c
 ```
 
 Now thread 0 (ax=0) is the waiter and runs first, but thread 1 (the signaller) hasn't run yet meaning memory2000 stays 0 and thread 0 busy-waits, spinning on the load/test/jump loop. It only stops when the scheduler switches to thread 1, which sets value=1. With -i 1000, thread 0 spins around 334 times before the switch.  Random intervals vary the spin count (with -i 5 -r -s 0 it spins just once). This definitely not efficient. The waiter burns CPU cycles spinning instead of yielding/blocking like it should.
+
+# Chapter 28
+
+---
+
+## Question 1
+
+The flag.s file creates a lock using a single memory variable flag which can be set to 0 for free and 1 to be held. to aquire: mov flag,%ax; test $0,%ax; jne .acquire; mov $1,flag. Critical section increments count. To Release: mov $0,flag. The acquire is not atomic since the process is load, test, then store, so it can be interrupted between the test and the set.
+
+---
+
+## Question 2
+
+```bash
+python3 x86.py -p flag.s -M flag,count -R ax,bx -c
+```
+
+```
+ flag count      ax    bx          Thread 0                Thread 1         
+    0     0       0     0   
+    0     0       0     0   1000 mov  flag, %ax
+    1     0       0     0   1003 mov  $1, flag
+    ...
+    0     2       2    -1                            1011 halt
+```
+
+With the defaults (-t 2, -i 50, no -a) each thread loops once so the flag ends at 0 indicating the lock is released and the count ends at 2. It only works out because -i 50 is bigger than the whole program so the threads never end up interleaving.
+
+---
+
+## Question 3
+
+```bash
+python3 x86.py -p flag.s -t 2 -a bx=2,bx=2 -M flag,count -i 100 -c
+```
+
+```
+ flag count          Thread 0                Thread 1
+    0     0   
+    0     0   1000 mov  flag, %ax
+    ...
+    0     4                            1011 halt
+```
+
+With these args each thread loops twice and count ends at 4. Things still worked because no interrupts happened mid run, the lock itself was never really tested in this case.
+
+---
+
+## Question 4
+
+```bash
+python3 x86.py -p flag.s -t 2 -a bx=2,bx=2 -M flag,count -i 1 -c
+```
+
+```
+ flag count          Thread 0                Thread 1         
+    0     0   
+    0     0   1000 mov  flag, %ax
+    1     0   1003 mov  $1, flag
+    1     0                            1003 mov  $1, flag
+    ...
+    0     2                            1011 halt
+```
+
+```bash
+for i in $(seq 1 24); do
+  v=$(python3 x86.py -p flag.s -t 2 -a bx=2,bx=2 -M count -i $i -c \
+      | awk '/1011 halt/{v=$1} END{print v}')
+  echo "-i $i -> count = $v"
+done
+```
+
+```
+-i 1  -> count = 2
+-i 2  -> count = 2
+-i 3  -> count = 3
+-i 4  -> count = 3
+-i 5  -> count = 4
+-i 6  -> count = 3
+-i 7  -> count = 3
+-i 8  -> count = 4
+-i 9  -> count = 4
+-i 10 -> count = 4
+...
+-i 24 -> count = 4
+```
+
+With these args the lock fails: -i 1,2 gets count 2; -i 3,4 gets count 3; -i 6,7 gets count 3. We get 4, the correct count, only at -i 5 and -i ≥ 8. I noticed that bad outcomes happen when an interrupt happens inside the 4-instruction acquire (mov flag, test, jne, mov $1,flag), letting both threads see flag is 0 and both set it to 1.
+
+---
+
+## Question 5
+
+```bash
+cat test-and-set.s
+```
+
+```
+.var mutex
+.var count
+
+.main
+.top
+
+.acquire
+mov  $1, %ax
+xchg %ax, mutex
+test $0, %ax
+jne  .acquire
+
+mov  count, %ax
+add  $1, %ax
+mov  %ax, count
+
+mov  $0, mutex
+
+sub  $1, %bx
+test $0, %bx
+jgt .top
+
+halt
+```
+
+test-and-set.s builds the lock with the atomic xchg. To aquire it does the folloing: mov $1,%ax; xchg %ax,mutex; test $0,%ax; jne .acquire — xchg atomically swaps and returns the old value. To release it does mov $0,mutex.
+
+---
+
+## Question 6
+
+```bash
+python3 x86.py -p test-and-set.s -t 2 -a bx=2,bx=2 -M mutex,count -i 3 -c
+```
+
+```
+mutex count          Thread 0                Thread 1         
+    0     0   
+    0     0   1000 mov  $1, %ax
+    1     0   1001 xchg %ax, mutex
+    ...
+    0     4                            1011 halt
+```
+
+```bash
+python3 x86.py -p test-and-set.s -t 2 -a bx=2,bx=2 -M mutex,count -i 3 -c -S 2>&1 | grep "STATS"
+```
+
+```
+STATS:: Instructions    66
+```
+
+```bash
+for i in 1 2 3 4 5 6 8 10; do
+  v=$(python3 x86.py -p test-and-set.s -t 2 -a bx=2,bx=2 -M count -i $i -c \
+      | awk '/1011 halt/{v=$1} END{print v}')
+  echo "-i $i -> count = $v"
+done
+```
+
+```
+-i 1  -> count = 4
+-i 2  -> count = 4
+-i 3  -> count = 4
+-i 4  -> count = 4
+-i 5  -> count = 4
+-i 6  -> count = 4
+-i 8  -> count = 4
+-i 10 -> count = 4
+```
+
+In my experiement test-and-set always produced the correct count. Mutual exclusion was maintained since xchg is atomic. I did observe that it can be inefficient. When the lock is held the waiting thread spins. I noticed around 20 instructions were wasted of the 66 total.
+
+---
+
+## Question 7
+
+```bash
+python3 x86.py -p test-and-set.s -t 2 -a bx=1,bx=1 -M mutex,count -P 00001111 -c
+```
+
+```
+mutex count          Thread 0                Thread 1         
+    0     0   
+    0     0   1000 mov  $1, %ax
+    1     0   1001 xchg %ax, mutex
+    ...
+    0     2                            1011 halt
+```
+
+Using -P 00001111 thread 0 gets the lock, thread 1 tries xchg, gets 1 back, and spins. The correct thing happens: thread 1 waits until thread 0 releases, then acquires; final count = 2 (good). It was also worth testing when both threads attempting the first xchg simultaneously and a lock already held with many contending threads.
+
+---
+
+## Question 8
+
+```bash
+cat peterson.s
+```
+
+```
+.var flag   2
+
+.var turn
+.var count
+
+.main
+lea flag, %fx
+
+mov %bx, %cx
+neg %cx
+add $1, %cx
+
+.acquire
+mov $1, 0(%fx,%bx,4)
+mov %cx, turn
+
+.spin1
+mov 0(%fx,%cx,4), %ax
+test $1, %ax
+jne .fini
+
+.spin2
+mov turn, %ax
+test %cx, %ax
+je .spin1
+
+.fini
+mov count, %ax
+add $1, %ax
+mov %ax, count
+
+.release
+mov $0, 0(%fx,%bx,4)
+mov %cx, turn
+halt
+```
+
+This implements peterson's algorithm which uses a flag array a turn with functions as a tiebreaker. Requires bx = thread id, cx = 1-self. A thread spins only when the other has also set its flag and turn equals 1-self.
+
+---
+
+## Question 9
+
+```bash
+python3 x86.py -p peterson.s -t 2 -a bx=0,bx=1 -M 100,104,108,112 -c
+python3 x86.py -p peterson.s -t 2 -a bx=0,bx=1 -M 100,104,108,112 -i 2 -c
+```
+
+```
+  100   104   108   112          Thread 0                Thread 1
+    0     0     0     0
+    1     0     1     0   1005 mov %cx, turn
+    ...
+    0     0     0     2                            1017 halt
+```
+
+With these args count ends at 2 so mutual exclusion and progress both hold. Different values for -i do not impact correctness.
+
+---
+
+## Question 10
+
+```bash
+python3 x86.py -p peterson.s -t 2 -a bx=0,bx=1 -M 100,104,108,112 -P 01 -c
+```
+
+```
+  100   104   108   112          Thread 0                Thread 1
+    0     0     0     0
+    1     1     0     0                            1004 mov $1, 0(%fx,%bx,4)
+    ...
+    0     0     0     2                            1017 halt
+```
+
+-P 01 is the most challenging schedule but the count still ends at 2 meaning mutual and exclusion and progress both hold. When both threads try to aquire the lock only one gets it and the other spins. The spinning thread eventually proceeds and passes its turn back so we avoid a deadlock.
+
+
+---
+
+## Question 11
+
+```bash
+python3 x86.py -p ticket.s -t 2 -a bx=2,bx=2 -M ticket,turn,count -c
+```
+
+```
+ticket  turn count          Thread 0                Thread 1         
+    0     0     0   
+    0     0     0   1000 mov $1, %ax
+    1     0     0   1001 fetchadd %ax, ticket
+    ...
+    4     4     4                            1013 halt
+```
+
+```bash
+python3 x86.py -p ticket.s -t 1 -a bx=2000 -M count -S -c 2>&1 | grep "STATS:: Instructions"
+python3 x86.py -p ticket.s -t 2 -a bx=1000,bx=1000 -M count -S -c 2>&1 | grep "STATS:: Instructions"
+python3 x86.py -p ticket.s -t 2 -a bx=1000,bx=1000 -M count -c | awk '/1013 halt/{v=$1} END{print "final count =", v}'
+```
+
+```
+STATS:: Instructions    26001
+STATS:: Instructions    99463
+final count = 2000
+```
+
+ticket.s matches the chapter's ticket lock. With bx=1000 each, count ends at the correct value 2000 and acquisition is FIFO. The threads do spin-wait a lot. 99,463 total instructions vs 26,001 for the single-thread baseline meaning around 73,000 instructions were wasted spinning
+
+---
+
+## Question 12
+
+```bash
+python3 x86.py -p ticket.s -t 3 -a bx=1000 -M count -S -c 2>&1 | grep -E "numthreads|STATS:: Instructions"
+python3 x86.py -p ticket.s -t 4 -a bx=500  -M count -S -c 2>&1 | grep -E "numthreads|STATS:: Instructions"
+```
+
+```
+ARG numthreads 3
+STATS:: Instructions    149424
+ARG numthreads 4
+STATS:: Instructions    99291
+```
+
+In my experiment more threads meant more total spinning. Things remained correct and fair, but the spinning and waiting scales up.
+
+---
+
+## Question 13
+
+```bash
+python3 x86.py -p test-and-set.s -t 2 -a bx=1000,bx=1000 -M count -S -c 2>&1 | grep "STATS:: Instructions"
+python3 x86.py -p yield.s -t 2 -a bx=1000,bx=1000 -M count -S -c 2>&1 | grep "STATS:: Instructions"
+```
+
+```
+STATS:: Instructions    33954
+STATS:: Instructions    23334
+```
+
+```bash
+python3 x86.py -p yield.s -t 2 -a bx=2,bx=2 -M mutex,count -i 3 -c
+```
+
+```
+mutex count          Thread 0                Thread 1         
+    0     0   
+    1     0   1001 xchg %ax, mutex
+    1     0                            1004 yield
+    ...
+    0     4                            1013 halt
+```
+
+13. With bx=1000, test-and-set.s uses 33,954 instructions and yield.s uses only 23,334 which is 31% less. The happen when a thread finds the lock held. Instead of spinning for its whole time, yield.s yields and immediately hands the CPU to the other thread. Savings happen whenever the lock is requested and the holder is able to give it up.
+
+
+---
+
+## Question 14
+
+```bash
+python3 x86.py -p test-and-test-and-set.s -t 2 -a bx=2,bx=2 -M mutex,count -i 3 -c
+```
+
+```
+mutex count          Thread 0                Thread 1
+    0     0   
+    0     0   1000 mov  mutex, %ax
+    1     0   1004 xchg %ax, mutex
+    ...
+    0     4                            1014 halt
+```
+
+```bash
+python3 x86.py -p test-and-set.s          -t 2 -a bx=1000,bx=1000 -M count -S -c 2>&1 | grep "STATS:: Instructions"
+python3 x86.py -p test-and-test-and-set.s -t 2 -a bx=1000,bx=1000 -M count -S -c 2>&1 | grep "STATS:: Instructions"
+python3 x86.py -p test-and-set.s          -t 2 -a bx=1000,bx=1000 -M count -c 2>&1 | grep -c xchg
+python3 x86.py -p test-and-test-and-set.s -t 2 -a bx=1000,bx=1000 -M count -c 2>&1 | grep -c xchg
+```
+
+```
+STATS:: Instructions    33954
+STATS:: Instructions    42821
+xchg count = 4988
+xchg count = 2284
+```
+
+test-and-test-and-set.s adds mov mutex,%ax read before the atomic xchg. This spins and only attempts the expensive xchg when the load shows the lock might be free. In the simulator it runs more total instructions but executes far fewer atomic xchg operations. (2,284 vs 4,988). Instead of saving instruction count it's avoiding the expensive atomic instruction on real multiprocessors.
