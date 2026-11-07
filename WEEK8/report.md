@@ -1039,3 +1039,17 @@ xchg count = 2284
 ```
 
 test-and-test-and-set.s adds mov mutex,%ax read before the atomic xchg. This spins and only attempts the expensive xchg when the load shows the lock might be free. In the simulator it runs more total instructions but executes far fewer atomic xchg operations. (2,284 vs 4,988). Instead of saving instruction count it's avoiding the expensive atomic instruction on real multiprocessors.
+
+# Chapter 29
+
+1. timer.c uses gettimeofday. It measures in microseconds. The smallest interval it can measure is 6 microseconds.
+
+2. counter.c is a simple counter with one lock. The system has 4 CPUs. It got slower as threads grew, 0.010 seconds with 1 thread and 0.182 seconds with 8 threads. The 4 CPUs do not help because the one lock lets only one thread increment at a time.
+
+3. sloppy.c is the approximate counter. With 4 threads it got faster as the threshold grew, 0.209 seconds at threshold 1 and 0.098 seconds at threshold 1024. This matches the chapter. A small threshold acts like one global lock. A bigger threshold touches the global counter less so it is faster.
+
+4. list-hoh.c is the hand over hand list. It got slower as threads grew, 0.119 seconds with 1 thread and 2.339 seconds with 4 threads. It beats a single lock list only when the list is long and threads touch different nodes. On a short list the per node lock cost is not worth it.
+
+5. btree.c is a B-tree with one lock. It got slower as threads grew, 0.117 seconds with 1 thread and 1.191 seconds with 8 threads.
+
+6. btree-lock.c is the same B-tree with a lock per node. It was worse than the one lock version, 0.199 seconds with 1 thread and 11.881 seconds with 8 threads. The many locks add overhead and threads pile up at the root. Per node locking only helps on a larger tree with less contention.
